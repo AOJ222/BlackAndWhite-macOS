@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a problem with the macOS port
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include the details below. Do not attach game files, disc images, game executables, saved games, or profiles.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version or commit
+      description: The release version, or the commit shown on the repository page.
+      placeholder: "e.g. v1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: Mac and macOS
+      description: For example, MacBook Air M2, macOS 27.0.
+      placeholder: "e.g. Mac mini M4, macOS 27.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: disc_edition
+    attributes:
+      label: Game edition used during setup
+      description: Do not upload the disc or any files from it.
+      options:
+        - English 1.00 PC disc
+        - Other edition
+        - Setup not reached
+        - Prefer not to say
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened?
+      description: Say what you expected, what happened instead, and the steps that lead to it.
+      placeholder: "1. Opened the app...\n2. Chose...\n3. Saw..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt (optional)
+      description: Paste only the relevant lines. Remove usernames, folder paths, and anything private first.
+      render: text
+  - type: checkboxes
+    id: content_check
+    attributes:
+      label: Content check
+      options:
+        - label: I have not attached game files, disc images, saved games, or personal information.
+          required: true

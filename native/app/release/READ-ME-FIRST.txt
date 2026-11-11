@@ -1,0 +1,63 @@
+Black & White for Mac
+=====================
+
+A native macOS port of Black & White (2001) for Apple silicon Macs.
+
+This download contains NO game content. It only works with your own
+copy of Black & White, which is read once during set-up and never
+changed.
+
+What you need
+-------------
+- An Apple silicon Mac (M1 or later) running macOS 27.
+- Your own copy of Black & White: the PC disc as an .iso disc image, a
+  folder that is a copy of the disc, or the folder the game is already
+  installed in. Any version works — the original disc as sold, a
+  patched copy, or another language edition.
+- About 3 GB of free disk space.
+
+Set-up (once)
+-------------
+1. Move "Black & White.app" into your Applications folder.
+   ("Black & White Settings.app" too, if you want to change the
+   picture size, frame rate limit or sound outside the game.)
+2. Open Black & White. macOS may refuse the first launch because the
+   app is not notarised: open System Settings, go to Privacy &
+   Security, scroll down, click "Open Anyway", then "Open".
+3. The app asks you to add your copy of the game. Choose your .iso
+   image, the folder that is a copy of the disc, or the folder the
+   game is installed in. The app checks every file, builds the game
+   under ~/Library/Application Support/Black & White, and says when
+   it is ready. This takes under a minute.
+4. Press "Play Black & White".
+
+After that, just open the app: it goes straight to the game and the
+disc is not needed again.
+
+Playing
+-------
+- Everything is played with the mouse. Control-click (or a two-finger
+  click) is the right mouse button; pinch or scroll to zoom.
+- Cmd-Q quits. In the game's Options screen you can also change the
+  Screen and Resolution while you play.
+- "Black & White Settings.app" changes the picture size, frame rate
+  limit and sound before you start.
+- Saves live in ~/Library/Application Support/Black & White/data.
+
+If something goes wrong
+-----------------------
+- If the app says it cannot use what you chose, nothing was set up.
+  Try the .iso image, a fresh folder copy of the disc, or the folder
+  the game is installed in.
+- To start set-up over, quit the game and delete the folder
+  ~/Library/Application Support/Black & White, then open the app again.
+- Logs are kept in ~/Library/Logs/Black & White (the ten newest).
+
+About this port
+---------------
+The original game's code runs natively on Apple silicon; the game's
+worlds, sounds and pictures come only from your copy. Black & White is a trademark of
+its owners; this is an unofficial fan port, not affiliated with or
+endorsed by them. No game data is included. Please do not share the
+files imported from your disc. Third-party library notices are in
+THIRD_PARTY_NOTICES.md in the project repository.
