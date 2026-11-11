@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Builds "Black & White.app" from a bw_native build.
+"""Builds "Black & White.app" from the bw_native builds.
 
-    python3 native/app/build-app.py [--build-dir DIR] [--out DIR] [--game-dir DIR] [--disc-dir DIR]
+    python3 native/app/build-app.py [--build-dir DIR] [--build-dir-142 DIR] [--build-dir-ci DIR]
+                                    [--out DIR] [--game-dir DIR] [--disc-dir DIR]
                                     [--install] [--force] [--release]
 
-The app holds the native build, the libraries it loads, and the program files the set-up
-generates the game program from; it holds no game content — every world, texture and
-sound comes from the player's own copy of the game. On its first
+The app holds the native builds (one per version of the game it supports: bw_native for 1.00
+and bw_native_142 for the Fan Patch 1.42 build; bw_native_ci for Creature Isle is added
+only with BW_INCLUDE_CI=1, and that build is not part of a release yet), the libraries
+they load, and the program files the set-up generates each version's game program from; it
+holds no game content — every world, texture and sound comes from the player's own copy of
+the game. On its first
 start it asks for that copy and sets the game up from it (frontdoor/, a compiled
 Swift program, Contents/MacOS/BlackWhite); later starts go straight to the game. With
---release nothing about this Mac is baked in: defaults.conf names only the program the build
-was made from, so the app always starts with the add-your-disc step. Without --release, and
+--release nothing about this Mac is baked in, so the app always starts with the add-your-disc
+step. Without --release, and
 without --game-dir and --disc-dir, the folders it is set up to use are the copies that
 stage-game.py puts in ~/Library/Application Support/Black & White/, or, when those do not
 exist, the repository's own.
 
 What it does:
-  1. Takes bw_native and every non-system library it loads (SwARc's librecomp_*.dylib, SDL3,
-     ffmpeg and what ffmpeg loads) from the build directory and Homebrew, and copies them in.
+  1. Takes the native builds and every non-system library they load (SwARc's librecomp_*.dylib, SDL3,
+    ffmpeg and what ffmpeg loads) from the build directories and Homebrew, and copies them in.
   2. Rewrites each library's install name and its references to @rpath/<name>, removes every
      other run-path (the build directory's, Homebrew's) and adds one that points inside the app,
      so the app cannot silently load a library from outside itself.
@@ -33,7 +37,9 @@ What it does:
      way (its own checks run from inside the finished bundle).
   7. Compiles the front door (frontdoor/BlackWhiteFrontDoor.swift) as the bundle's main
      executable, Contents/MacOS/BlackWhite, with launcher.sh in Resources as
-     BlackWhiteLauncher.sh, game-manifest.json in Resources, and unshield in
+     BlackWhiteLauncher.sh, the manifests (game-manifest.json, game-manifest-142.json, and
+     game-manifest-ci.json when the Creature Isle build is included) and their program
+     kits in Resources, and unshield in
      Contents/Helpers (its library goes in Frameworks with the rest), so a first start can
      add the player's disc with no Terminal and no tools of the Mac's own. The front door's
      own checks run from inside the finished bundle, as the settings app's do.
@@ -330,6 +336,10 @@ def verify_settings(app):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build-dir", default=str(REPO / "native/bw-native/build/release"))
+    ap.add_argument("--build-dir-142", default=str(REPO / "native/bw-native/build-142"),
+                    help="the Fan Patch 1.42 build directory (bw_native_142)")
+    ap.add_argument("--build-dir-ci", default=str(REPO / "native/bw-native/build-ci"),
+                    help="the Creature Isle build directory (bw_native_ci)")
     ap.add_argument("--out", default=str(HERE / "out"))
     ap.add_argument("--game-dir", help="the game folder to bake in as the default (see below)")
     ap.add_argument("--disc-dir", help="the disc copy to bake in as the default (see below)")
@@ -365,6 +375,17 @@ def main():
     exe = build / "bw_native"
     if not exe.is_file():
         raise SystemExit("no bw_native in %s" % build)
+    # One native build per version of the game; the launcher starts the one the
+    # player's set-up recorded (GAME_VERSION in settings.conf).
+    binaries = [(exe, "bw_native")]
+    extra_builds = [(args.build_dir_142, "bw_native_142")]
+    if INCLUDE_CI:
+        extra_builds.append((args.build_dir_ci, "bw_native_ci"))
+    for build_dir, name in extra_builds:
+        candidate = Path(build_dir).resolve() / name
+        if not candidate.is_file():
+            raise SystemExit("no %s in %s; build it first (native/bw-native, BW_VERSION)" % (name, build_dir))
+        binaries.append((candidate, name))
 
     free_gb = shutil.disk_usage(HERE).free / 2**30
     if free_gb < MIN_FREE_GB_STOP:
@@ -381,13 +402,26 @@ def main():
     if first != (exe.stat().st_size, exe.stat().st_mtime_ns):
         raise SystemExit("bw_native changed while it was being read; run this again")
 
-    libs = closure(exe)
+    libs = {}
+    bw_build_trees = str(REPO / "native/bw-native") + "/"
+    for binary, _name in binaries:
+        for leaf, real in closure(binary).items():
+            if leaf in libs and libs[leaf] != real:
+                # Each version's build tree makes its own copy of the project's
+                # libraries (same sources, same build settings; only the build
+                # folder's paths inside them differ). They are interchangeable,
+                # so the first build's copy serves every program; two libraries
+                # of any other origin with one name are still a mistake.
+                if str(libs[leaf]).startswith(bw_build_trees) and str(real).startswith(bw_build_trees):
+                    continue
+                raise SystemExit("two different files are called %s: %s and %s" % (leaf, libs[leaf], real))
+            libs.setdefault(leaf, real)
 
     # When the parts of this build were written, read before anything is copied or rewritten: the
-    # program, and the libraries built inside this repository (not Homebrew's).
+    # programs, and the libraries built inside this repository (not Homebrew's).
     lib_times = [int(Path(real).stat().st_mtime) for real in libs.values() if str(real).startswith(str(REPO))]
     newest_lib = max(lib_times) if lib_times else int(exe.stat().st_mtime)
-    artifact_time = max(int(exe.stat().st_mtime), newest_lib)
+    artifact_time = max([int(b.stat().st_mtime) for b, _n in binaries] + [newest_lib])
 
     out = Path(args.out).resolve()
     work = out / (".building-%d" % os.getpid())
@@ -396,7 +430,8 @@ def main():
     for sub in ("MacOS", "Frameworks", "Resources"):
         (contents / sub).mkdir(parents=True)
 
-    shutil.copy2(exe, contents / "MacOS" / "bw_native")
+    for binary, name in binaries:
+        shutil.copy2(binary, contents / "MacOS" / name)
     for leaf, real in sorted(libs.items()):
         shutil.copy2(real, contents / "Frameworks" / leaf)
     # unshield's libraries ride with the game's libraries (its own, and the OpenSSL it
@@ -406,12 +441,13 @@ def main():
         if leaf in libs and libs[leaf] != real:
             raise SystemExit("two different files are called %s: %s and %s" % (leaf, libs[leaf], real))
         shutil.copy2(real, contents / "Frameworks" / leaf)
-    for p in list((contents / "Frameworks").iterdir()) + [contents / "MacOS" / "bw_native"]:
+    for p in list((contents / "Frameworks").iterdir()) + [contents / "MacOS" / name for _b, name in binaries]:
         os.chmod(p, 0o755)
 
     for p in sorted((contents / "Frameworks").iterdir()):
         rewrite(p, False)
-    rewrite(contents / "MacOS" / "bw_native", True)
+    for _binary, name in binaries:
+        rewrite(contents / "MacOS" / name, True)
 
     # The front door is the bundle's main executable: a compiled program, so macOS lets it
     # ask for the player's disc. It hands over to the launcher script beside it once the
@@ -422,30 +458,46 @@ def main():
     # and a loose script in MacOS makes codesign refuse the bundle.
     shutil.copy2(HERE / "launcher.sh", contents / "Resources" / (LAUNCHER_SCRIPT_NAME + ".sh"))
     os.chmod(contents / "Resources" / (LAUNCHER_SCRIPT_NAME + ".sh"), 0o755)
-    shutil.copy2(HERE / "game-manifest.json", contents / "Resources" / "game-manifest.json")
+    manifest_names = ["game-manifest.json", "game-manifest-142.json"]
+    if INCLUDE_CI:
+        manifest_names.append("game-manifest-ci.json")
+    for manifest_name in manifest_names:
+        shutil.copy2(HERE / manifest_name, contents / "Resources" / manifest_name)
 
-    # The program files the front door generates the game program from at set-up, so the
-    # player's own copy of the game is only ever asked for the game itself, never for a
-    # program of its own. They are taken from the folder the build was lifted from
-    # (BW_PROGRAM_DIR, else bw1-decomp's) and checked against the manifest; they are
-    # build inputs of this Mac, never files of this repository.
-    program_dir = Path(os.environ.get("BW_PROGRAM_DIR") or REPO / "bw1-decomp/orig/BW1W100")
-    manifest = __import__("json").loads((HERE / "game-manifest.json").read_text())
-    kit = contents / "Resources" / "ProgramKit"
-    kit.mkdir()
-    for entry in manifest.get("program", []):
-        dest = entry["dest"]
-        leaf = dest.rsplit("/", 1)[-1]
-        cands = [program_dir / ("runblack-decrypted.exe" if dest == "runblack.exe" else leaf),
-                 program_dir / dest, program_dir / leaf,
-                 REPO / "native/run/game" / dest]
-        src = next((c for c in cands if c.is_file()), None)
-        if src is None:
-            raise SystemExit("the program file for %s was not found in %s; set BW_PROGRAM_DIR to the "
-                             "folder the build was lifted from" % (dest, program_dir))
-        if sha256(src) != entry["sha256"] or src.stat().st_size != entry["size"]:
-            raise SystemExit("%s is not the program file the manifest names for %s" % (src, dest))
-        shutil.copy2(src, kit / leaf)
+    # The program files the front door generates each version's game program from at
+    # set-up, so the player's own copy of the game is only ever asked for the game itself,
+    # never for a program of its own. One kit per version, taken from the folder that
+    # version's build was lifted from (BW_PROGRAM_DIR, BW_PROGRAM_DIR_142 and
+    # BW_PROGRAM_DIR_CI name another) and checked against its manifest; they are build
+    # inputs of this Mac, never files of this repository.
+    import json
+    kits = [
+        ("game-manifest.json", "ProgramKit",
+         Path(os.environ.get("BW_PROGRAM_DIR") or REPO / "bw1-decomp/orig/BW1W100")),
+        ("game-manifest-142.json", "ProgramKit-142",
+         Path(os.environ.get("BW_PROGRAM_DIR_142") or REPO / "toolkit-trial/bw-1.42")),
+    ]
+    if INCLUDE_CI:
+        kits.append(("game-manifest-ci.json", "ProgramKit-CI",
+                     Path(os.environ.get("BW_PROGRAM_DIR_CI") or REPO / "bw1-decomp/orig/BW1WCI")))
+    for manifest_name, kit_name, program_dir in kits:
+        manifest = json.loads((HERE / manifest_name).read_text())
+        kit = contents / "Resources" / kit_name
+        kit.mkdir()
+        for entry in manifest.get("program", []):
+            dest = entry["dest"]
+            leaf = dest.rsplit("/", 1)[-1]
+            cands = [program_dir / leaf, program_dir / dest,
+                     REPO / "native/run/game" / dest]
+            if leaf.endswith(".exe"):
+                cands.insert(0, program_dir / (leaf[:-4] + "-decrypted.exe"))
+            src = next((c for c in cands if c.is_file()), None)
+            if src is None:
+                raise SystemExit("the program file for %s was not found in %s; set the BW_PROGRAM_DIR "
+                                 "variables to the folders the builds were lifted from" % (dest, program_dir))
+            if sha256(src) != entry["sha256"] or src.stat().st_size != entry["size"]:
+                raise SystemExit("%s is not the program file %s names for %s" % (src, manifest_name, dest))
+            shutil.copy2(src, kit / leaf)
 
     helpers = contents / "Helpers"
     helpers.mkdir()
@@ -469,22 +521,24 @@ def main():
         "built %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
         "bw-native %s (%s), %s" % (bw_rev, bw_branch, "uncommitted changes in %d files" % bw_dirty if bw_dirty else "clean"),
         "swarc %s (%s), %s" % (sw_rev, sw_branch, "uncommitted changes in %d files" % sw_dirty if sw_dirty else "clean"),
-        "bw_native sha256 %s (as built, before the library paths were rewritten)" % sha256(exe),
+        *["%s sha256 %s (as built, before the library paths were rewritten)" % (name, sha256(binary))
+          for binary, name in binaries],
         "bw_native file written %s; newest library of the build written %s"
         % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(exe.stat().st_mtime)),
            time.strftime("%H:%M:%S", time.localtime(newest_lib))),
         "libraries bundled: %d" % len(libs),
-        "first start: the front door (compiled) offers to add the player's own copy of the game (disc, disc folder or installed copy, any version); the program files are generated at set-up from the bundled program kit; unshield is bundled",
+        "versions: Black & White 1.00 and Fan Patch 1.42 (a 1.10/1.20 copy plays through the 1.42 build)%s; which one runs follows GAME_VERSION in the player's settings"
+        % (" and Creature Isle over the base game" if INCLUDE_CI else ""),
+        "first start: the front door (compiled) offers to add the player's own copy of the game (disc, disc folder or installed copy, any version); each version's program files are generated at set-up from its bundled program kit; unshield is bundled",
         "defaults: %s" % ("release (no game folder or disc copy named)" if args.release
                           else "this Mac's game folder and disc copy"),
     ] + stale_notes(artifact_time, [build_tree, swarc_tree])
     (contents / "Resources" / "BUILD-INFO.txt").write_text("\n".join(info) + "\n")
 
     defaults = []
-    # The program file the runtime insists on, read from the source it was built from.
-    pin = re.search(r'kExe\s*=\s*\{"[^"]+",\s*"([0-9a-f]{64})"\}', (build_tree / "src/main.cpp").read_text())
-    if pin:
-        defaults.append("EXE_SHA256=%s" % pin.group(1))
+    # No program pin is baked in: which program the runtime insists on follows the
+    # version the player's set-up recorded (GAME_VERSION in settings.conf), and the
+    # launcher carries each version's value.
     if not args.release and game_dir.is_dir():
         defaults.append("GAME_DIR=%s" % game_dir)
     if not args.release and disc_dir.is_dir():
@@ -515,7 +569,8 @@ def main():
         sign(p)
     sign(contents / "Helpers" / "unshield")
     sign(contents / "MacOS" / LAUNCHER_NAME)
-    sign(contents / "MacOS" / "bw_native")
+    for _binary, name in binaries:
+        sign(contents / "MacOS" / name)
     sign(app)
 
     problems = verify(app, libs, args.release)
@@ -565,11 +620,22 @@ def install(built, built_settings):
         print("installed %s" % target)
 
 
+# Creature Isle is bundled only when BW_INCLUDE_CI=1: its build does not
+# start reliably yet, and the front door refuses the expansion either way.
+INCLUDE_CI = os.environ.get("BW_INCLUDE_CI", "0") == "1"
+
+BINARY_NAMES = ("bw_native", "bw_native_142") + (("bw_native_ci",) if INCLUDE_CI else ())
+# (manifest in Resources, the program kit beside it, content files it must list)
+MANIFESTS = (("game-manifest.json", "ProgramKit", 1063),
+             ("game-manifest-142.json", "ProgramKit-142", 1063)) + \
+            ((("game-manifest-ci.json", "ProgramKit-CI", None),) if INCLUDE_CI else ())
+
+
 def verify(app, libs, release=False):
     problems = []
     contents = app / "Contents"
     frameworks = contents / "Frameworks"
-    images = sorted(frameworks.iterdir()) + [contents / "MacOS" / "bw_native"]
+    images = sorted(frameworks.iterdir()) + [contents / "MacOS" / name for name in BINARY_NAMES]
     bundled = set(p.name for p in frameworks.iterdir())
 
     r = run("/usr/bin/codesign", "--verify", "--deep", "--strict", app, check=False)
@@ -597,16 +663,17 @@ def verify(app, libs, release=False):
                 continue
             if not dep.startswith("@rpath/") or dep[len("@rpath/"):] not in bundled:
                 problems.append("%s loads %s, which is not a system library or one bundled in the app" % (image.name, dep))
-        allowed = ["@executable_path/../Frameworks"] if image.name == "bw_native" else ["@loader_path"]
+        allowed = ["@executable_path/../Frameworks"] if image.name in BINARY_NAMES else ["@loader_path"]
         if sorted(rpaths(image)) != allowed:
             problems.append("%s has run-paths %s, wanted %s" % (image.name, rpaths(image), allowed))
 
-    # The program must start from inside the app: dyld resolves every library it names before
+    # Each program must start from inside the app: dyld resolves every library it names before
     # main() runs, and the checks above leave it no way to find one outside the app.
-    p = subprocess.run([str(contents / "MacOS" / "bw_native"), "--help"], capture_output=True, text=True, timeout=60)
-    if p.returncode != 0 or "usage: bw_native" not in p.stderr:
-        problems.append("bw_native --help from inside the app: exit %s, no usage line (stderr starts: %r)"
-                        % (p.returncode, p.stderr[:200]))
+    for name in BINARY_NAMES:
+        p = subprocess.run([str(contents / "MacOS" / name), "--help"], capture_output=True, text=True, timeout=60)
+        if p.returncode != 0 or "usage: bw_native" not in p.stderr:
+            problems.append("%s --help from inside the app: exit %s, no usage line (stderr starts: %r)"
+                            % (name, p.returncode, p.stderr[:200]))
 
     # The front door: a compiled main executable that loads nothing but system libraries,
     # the launcher script beside it, the manifest in Resources, and its own checks passing
@@ -626,20 +693,22 @@ def verify(app, libs, release=False):
                                 % (p.returncode, p.stdout[-600:], p.stderr[-300:]))
     if not (contents / "Resources" / (LAUNCHER_SCRIPT_NAME + ".sh")).is_file():
         problems.append("the launcher script (%s.sh) is missing from Resources" % LAUNCHER_SCRIPT_NAME)
-    manifest_path = contents / "Resources" / "game-manifest.json"
-    if not manifest_path.is_file():
-        problems.append("game-manifest.json is missing from Resources")
-    else:
-        import json
+    import json
+    for manifest_name, kit_name, want_files in MANIFESTS:
+        manifest_path = contents / "Resources" / manifest_name
+        if not manifest_path.is_file():
+            problems.append("%s is missing from Resources" % manifest_name)
+            continue
         manifest = json.loads(manifest_path.read_text())
-        if manifest.get("format") != 2 or len(manifest.get("files", [])) != 1063 \
-                or len(manifest.get("program", [])) != 5:
-            problems.append("game-manifest.json does not list the game folder's 1063 content files and 5 program files")
-        kit = contents / "Resources" / "ProgramKit"
+        files = manifest.get("files", [])
+        if manifest.get("format") != 2 or len(manifest.get("program", [])) != 5 \
+                or (want_files is not None and len(files) != want_files) or not files:
+            problems.append("%s does not list its content files and 5 program files" % manifest_name)
+        kit = contents / "Resources" / kit_name
         for entry in manifest.get("program", []):
             leaf = entry["dest"].rsplit("/", 1)[-1]
             if not (kit / leaf).is_file():
-                problems.append("the program kit has no %s" % leaf)
+                problems.append("the program kit %s has no %s" % (kit_name, leaf))
 
     # unshield must run from inside the app (its library found through its own run-path).
     unshield = contents / "Helpers" / "unshield"

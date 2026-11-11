@@ -7,14 +7,20 @@
     python3 native/app/import-game.py --iso BNW.iso --dest <folder>    # or into another folder
     python3 native/app/import-game.py --iso BNW.iso --replace          # again, replacing an earlier import
     python3 native/app/import-game.py --check "<folder>/Game"          # check a game folder; changes nothing
+    python3 native/app/import-game.py --ci-disc <folder>               # add Creature Isle over a set-up game
+    python3 native/app/import-game.py --ci-folder <game folder>        # the same from an installed copy
 
 Any complete copy of the game works: the original disc as sold, a patched copy (1.10/1.20, the Fan
 Patch), or another language edition. Nothing in this repository contains game data:
 native/app/game-manifest.json lists, for every file of the game folder, where it comes from on the disc,
 its size, its SHA-256 and the forms it is known in from the other versions of the game, and this script
-builds the folder from that list and checks every file it makes. The five program files are never taken
-from the player's copy: they are generated from the program files the native build was made from
-(--program-dir), so no copy of the game is refused for carrying a different program.
+builds the folder from that list and checks every file it makes. Which version the copy is (the original
+game, or a patched one that plays through the Fan Patch 1.42 build) is read from the copy itself and
+written to settings.conf as GAME_VERSION; the five program files are never taken from the player's copy:
+they are generated from the program files that version's native build was made from (--program-dir), so
+no copy of the game is refused for carrying a different program. Creature Isle (its disc, or the folder
+it is installed in) is added over a set-up base game the same way, from game-manifest-ci.json, and
+GAME_VERSION becomes ci.
 
 What it does, in order (disc image):
   1. reads the image without mounting it and copies its files into <dest>/Disc (read-only, like a disc),
@@ -54,8 +60,21 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 DEFAULT_DEST = Path.home() / "Library/Application Support/Black & White"
 MANIFEST = HERE / "game-manifest.json"
+MANIFESTS = {"100": MANIFEST, "142": HERE / "game-manifest-142.json", "ci": HERE / "game-manifest-ci.json"}
 PREPARE_DISC = REPO / "native/bw-native/tools/prepare_disc.py"
 DEFAULT_PROGRAM_DIR = REPO / "bw1-decomp/orig/BW1W100"
+# Where each version's program files live on this Mac (build inputs, never repository files).
+PROGRAM_DIRS = {"100": DEFAULT_PROGRAM_DIR,
+                "142": REPO / "toolkit-trial/bw-1.42",
+                "ci": REPO / "bw1-decomp/orig/BW1WCI"}
+# A program file an installed copy may carry, and the version it means (the two readable
+# programs, and the two protected ones, whose files still say which version the copy is).
+FOLDER_PROGRAM_VERSIONS = {
+    "86a30b08ab2ea8a240403d37f8f0303cf65aa5cde8e7f673049ab01654ccf755": "100",
+    "b1163b44f4e6c5e64d81d5fcce95dea8efdc587ad52910df4d4942e01dbfb3d1": "100",
+    "3f58bc02a6c421b4e66ef08716646bf0e1fa55ab292786edb521d7596ed48aba": "142",
+    "8b950ab537e77b32c22affea8d2e3dc6e8e62155d9f68a6a82d2a1114c4775ca": "142",
+}
 CHUNK = 1 << 20
 SCRATCH_GIB = 2.5  # the unpacked cabinets (0.5) and the new game folder (1.4), with room to spare
 UNSHIELD_PLACES = ("/opt/homebrew/bin/unshield", "/usr/local/bin/unshield")
@@ -66,12 +85,13 @@ def die(message):
     sys.exit(1)
 
 
-def load_manifest():
-    if not MANIFEST.is_file():
-        die("%s is missing (make-game-manifest.py writes it)" % MANIFEST)
-    manifest = json.loads(MANIFEST.read_text())
+def load_manifest(version="100"):
+    path = MANIFESTS[version]
+    if not path.is_file():
+        die("%s is missing (make-game-manifest.py writes it)" % path)
+    manifest = json.loads(path.read_text())
     if manifest.get("format") != 2 or not manifest.get("files"):
-        die("%s is not a manifest this script understands" % MANIFEST)
+        die("%s is not a manifest this script understands" % path)
     return manifest
 
 
@@ -130,28 +150,26 @@ def free_gib(path):
     return shutil.disk_usage(path).free / (1 << 30)
 
 
-def program_sources(program_dir):
-    """{dest: source} for the five generated program files."""
+def program_sources(program_dir, manifest):
+    """{dest: source} for the manifest's five generated program files."""
     pdir = Path(program_dir)
     sources = {}
-    for dest in ("runblack.exe", "lhlogr.dll", "LHaudiodllR.dll", "LHMultiplayerR.dll"):
-        name = "runblack-decrypted.exe" if dest == "runblack.exe" else dest
-        if (pdir / name).is_file():
-            sources[dest] = pdir / name
-    script = None
-    for cand in (pdir / "Plug Ins/ScriptLibraryR.dll", pdir / "ScriptLibraryR.dll",
-                 REPO / "native/run/game/Plug Ins/ScriptLibraryR.dll"):
-        if cand.is_file():
-            script = cand
-            break
-    if script:
-        sources["Plug Ins/ScriptLibraryR.dll"] = script
+    for entry in manifest.get("program", []):
+        dest = entry["dest"]
+        leaf = dest.rsplit("/", 1)[-1]
+        cands = [pdir / dest, pdir / leaf, pdir / "Plug Ins" / leaf,
+                 REPO / "native/run/game" / dest]
+        if leaf.endswith(".exe"):
+            cands.insert(0, pdir / (leaf[:-4] + "-decrypted.exe"))
+        src = next((c for c in cands if c.is_file()), None)
+        if src is not None:
+            sources[dest] = src
     return sources
 
 
 def generate_program(game_stage, manifest, program_dir):
     """Write the program files into the staged game folder; returns the bytes written."""
-    sources = program_sources(program_dir)
+    sources = program_sources(program_dir, manifest)
     total = 0
     for entry in manifest.get("program", []):
         src = sources.get(entry["dest"])
@@ -249,8 +267,9 @@ def load_prepare_disc():
     return module
 
 
-def build_game(find, manifest, program_dir, game_stage, what):
-    """Build the staged game folder through find(entry) -> source path; returns total bytes."""
+def build_game(find, manifest, game_stage, what="Black & White", made_hashes=None):
+    """Build the staged game folder's content files through find(entry) -> source path;
+    returns total bytes, or None (with the staged folder removed) when the copy is refused."""
     missing, wrong = [], []
     total = 0
     for entry in manifest["files"]:
@@ -260,11 +279,13 @@ def build_game(find, manifest, program_dir, game_stage, what):
                 missing.append(entry["dest"])
             continue
         size, digest = copy_hashed(src, game_stage / entry["dest"])
+        if made_hashes is not None:
+            made_hashes[entry["dest"]] = (size, digest)
         total += size
         if not accepts(entry, size, digest):
             wrong.append(entry["dest"])
     if missing or wrong:
-        print("import-game: that doesn't look like a complete copy of Black & White.", file=sys.stderr)
+        print("import-game: that doesn't look like a complete copy of %s." % what, file=sys.stderr)
         for label, items in (("not found", missing), ("not the game's files", wrong)):
             if items:
                 print("  %d %s:" % (len(items), label), file=sys.stderr)
@@ -276,8 +297,50 @@ def build_game(find, manifest, program_dir, game_stage, what):
               "language edition. Nothing was set up.", file=sys.stderr)
         remove_tree(game_stage)
         return None
-    total += generate_program(game_stage, manifest, program_dir)
     return total
+
+
+def detect_version(folder, manifest, made_hashes):
+    """Which version of the game a copy that passed the checks is: an installed copy's own
+    program file says so when it is a known one; otherwise the form of Scripts/info.dat
+    does (the file each patch rewrote). The original game is the answer when neither speaks."""
+    if folder is not None:
+        program = Path(folder) / "runblack.exe"
+        if program.is_file():
+            version = FOLDER_PROGRAM_VERSIONS.get(sha256_file(program))
+            if version:
+                return version
+    for entry in manifest["files"]:
+        if entry["dest"] == "Scripts/info.dat" and entry["dest"] in made_hashes:
+            _size, digest = made_hashes[entry["dest"]]
+            if digest == entry["sha256"]:
+                return "100"
+            if any(digest == v["sha256"] for v in entry.get("variants", [])):
+                return "142"
+    return "100"
+
+
+def write_settings(dest, version):
+    """settings.conf in dest: the game and disc folders, and which version was set up."""
+    dest = Path(dest)
+    wanted = {"GAME_DIR": str(dest / "Game"), "DISC_DIR": str(dest / "Disc"), "GAME_VERSION": version}
+    path = dest / "settings.conf"
+    lines = path.read_text().splitlines() if path.is_file() else []
+    seen = set()
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in wanted:
+            out.append("%s=%s" % (key, wanted[key]))
+            seen.add(key)
+        else:
+            out.append(line)
+    if not out or not out[0].startswith("#"):
+        out.insert(0, "# Black & White settings (written when your disc was added).")
+    for key, value in wanted.items():
+        if key not in seen:
+            out.append("%s=%s" % (key, value))
+    path.write_text("\n".join(out) + "\n")
 
 
 def place(dest, game_stage, disc_stage, volume_text, marker_text, total, count):
@@ -306,11 +369,11 @@ def import_image(iso, dest, replace, keep_temp, min_free, program_dir):
     if not PREPARE_DISC.is_file():
         die("%s is missing" % PREPARE_DISC)
     unshield = find_unshield()
-    if shutil.which("bsdtar") is None:
-        die("bsdtar was not found (it ships with macOS)")
 
     prepare = load_prepare_disc()
     pvd = prepare.read_pvd(iso)  # exits with a message if this is not an ISO 9660 image
+    if pvd["label"] == "BNWCI":
+        return import_ci_image(iso, dest, program_dir)
 
     dest = Path(dest).expanduser()
     game, disc = dest / "Game", dest / "Disc"
@@ -343,9 +406,12 @@ def import_image(iso, dest, replace, keep_temp, min_free, program_dir):
 def import_disc_folder(folder, dest, replace, keep_temp, min_free, program_dir):
     manifest = load_manifest()
     folder = Path(folder).expanduser()
-    if not folder.is_dir() or not any(p.name.lower() == "data1.cab" for p in folder.iterdir()):
+    cab = next((p for p in folder.iterdir() if p.name.lower() == "data1.cab"), None) if folder.is_dir() else None
+    if cab is None:
         die("%s is not a copy of the Black & White disc: it has no data1.cab at the top" % folder)
     unshield = find_unshield()
+    if cab_is_creature_isle(cab, unshield):
+        return import_ci_disc_folder(folder, dest, program_dir)
     dest = Path(dest).expanduser()
     game, disc = dest / "Game", dest / "Disc"
     if game.exists() and not replace:
@@ -382,16 +448,30 @@ def finish_disc_import(dest, disc, unshield, manifest, program_dir, keep_temp, i
     def find(entry):
         return (cab if entry["from"] == "cab" else disc) / entry["src"]
 
-    total = build_game(find, manifest, program_dir, partial, "disc")
+    made = {}
+    total = build_game(find, manifest, partial, made_hashes=made)
     if total is None:
         print("  (the disc copy in %s is fine and was kept; the scratch folder %s was kept)" % (disc, scratch), file=sys.stderr)
         return 1
+    version, program_bytes = generate_for_version(partial, manifest, made, None, program_dir)
+    total += program_bytes
+    print("    version: %s (program generated from %s)" % (version, program_dir or PROGRAM_DIRS[version]))
     print("4/4 putting the folder in place")
     marker = "image_sha256=%s\nlabel=%s\nfiles=%d\nbytes=%d\n" % (image_hash, label, len(manifest["files"]), total)
     result = place(dest, partial, None, _volume_text(dest), marker, total, len(manifest["files"]))
     if not keep_temp:
         remove_tree(scratch)
+    if result == 0:
+        write_settings(dest, version)
     return result
+
+
+def generate_for_version(game_stage, manifest, made_hashes, folder, program_override):
+    """Generate the version's program into the staged folder; returns (version, bytes)."""
+    version = detect_version(folder, manifest, made_hashes)
+    total = generate_program(game_stage, load_manifest(version),
+                             program_override or PROGRAM_DIRS[version])
+    return version, total
 
 
 def _volume_text(dest):
@@ -401,11 +481,13 @@ def _volume_text(dest):
     return "label=BNW\nfs=CDFS\nserial=%08X\nsectors=0\nimage_size=0\nimage_sha256=\n" % zlib.crc32(b"BNW")
 
 
-def import_folder(folder, dest, replace, min_free, program_dir):
+def import_folder(folder, dest, replace, min_free, program_dir, route_ci=True):
     manifest = load_manifest()
     folder = Path(folder).expanduser()
     if not (folder / "Data").is_dir() or not (folder / "Scripts").is_dir():
         die("%s is not an installed copy of Black & White: it has no Data and Scripts folders" % folder)
+    if route_ci and (folder / "CreatureIsle.exe").is_file():
+        return import_ci_folder(folder, dest, replace, min_free, program_dir)
     dest = Path(dest).expanduser()
     game = dest / "Game"
     if game.exists() and not replace:
@@ -418,9 +500,13 @@ def import_folder(folder, dest, replace, min_free, program_dir):
     index = FolderIndex(folder)
     partial = dest / "Game.partial"
     remove_tree(partial)
-    total = build_game(index.find, manifest, program_dir, partial, "folder")
+    made = {}
+    total = build_game(index.find, manifest, partial, made_hashes=made)
     if total is None:
         return 1
+    version, program_bytes = generate_for_version(partial, manifest, made, folder, program_dir)
+    total += program_bytes
+    print("    version: %s (program generated from %s)" % (version, program_dir or PROGRAM_DIRS[version]))
     print("2/2 putting the folder in place")
     volume = "label=BNW\nfs=CDFS\nserial=%08X\nsectors=0\nimage_size=0\nimage_sha256=\n" % zlib.crc32(str(folder).encode())
     marker = "image_sha256=\nlabel=BNW\nfiles=%d\nbytes=%d\n" % (len(manifest["files"]), total)
@@ -429,7 +515,117 @@ def import_folder(folder, dest, replace, min_free, program_dir):
     disc_stage = dest / ".Disc.partial"
     remove_tree(disc_stage)
     disc_stage.mkdir()
-    return place(dest, partial, disc_stage, volume, marker, total, len(manifest["files"]))
+    result = place(dest, partial, disc_stage, volume, marker, total, len(manifest["files"]))
+    if result == 0:
+        write_settings(dest, version)
+    return result
+
+
+# ---- Creature Isle, over a set-up base game
+
+def cab_is_creature_isle(cab_file, unshield):
+    """Whether an installer cabinet is the expansion's: its file groups are named in its listing."""
+    r = subprocess.run([unshield, "l", str(cab_file)], capture_output=True, text=True)
+    return "CreatureIsles\\" in r.stdout or "CreatureIsles/" in r.stdout
+
+
+def finish_ci_import(dest, find, disc_stage, label, serial, image_hash, program_dir, keep_temp=False):
+    """Lay the expansion's files over a copy of the set-up game folder, generate its
+    program, and put both in place. disc_stage is a staged disc copy, or None for an
+    empty one carrying the expansion's label."""
+    dest = Path(dest).expanduser()
+    if not (dest / "Game").is_dir():
+        die("Creature Isle is played over the base game: set Black & White up first, then add Creature Isle")
+    manifest = load_manifest("ci")
+    partial = dest / "Game.partial"
+    remove_tree(partial)
+    shutil.copytree(dest / "Game", partial)
+    print("building Creature Isle over the game folder (%d files)" % len(manifest["files"]))
+    total = build_game(find, manifest, partial, "Creature Isle")
+    if total is None:
+        return 1
+    total += generate_program(partial, manifest, program_dir or PROGRAM_DIRS["ci"])
+    if disc_stage is None:
+        disc_stage = dest / ".Disc.partial"
+        remove_tree(disc_stage)
+        disc_stage.mkdir()
+    volume = "label=%s\nfs=CDFS\nserial=%08X\nsectors=0\nimage_size=0\nimage_sha256=%s\n" % (label, serial, image_hash)
+    marker = "image_sha256=%s\nlabel=%s\nfiles=%d\nbytes=%d\n" % (image_hash, label, len(manifest["files"]), total)
+    result = place(dest, partial, disc_stage, volume, marker, total, len(manifest["files"]))
+    if result == 0:
+        write_settings(dest, "ci")
+    return result
+
+
+def import_ci_image(iso, dest, program_dir):
+    iso = Path(iso).expanduser()
+    unshield = find_unshield()
+    prepare = load_prepare_disc()
+    pvd = prepare.read_pvd(iso)
+    dest = Path(dest).expanduser()
+    if not (dest / "Game").is_dir():
+        die("Creature Isle is played over the base game: set Black & White up first, then add Creature Isle")
+    stage = dest / ".Disc.partial"
+    remove_tree(stage)
+    r = subprocess.run([sys.executable, str(PREPARE_DISC), "--image", str(iso), "--out", str(stage), "--force"])
+    if r.returncode != 0 or not (stage / "data1.cab").is_file():
+        remove_tree(stage)
+        die("the disc copy could not be made (see above)")
+    image_hash = _volume_value(str(stage) + ".volume", "image_sha256")
+    remove_tree(str(stage) + ".volume")
+    scratch = dest / ".import-scratch"
+    remove_tree(scratch)
+    scratch.mkdir()
+    cab = scratch / "cab"
+    print("unpacking the expansion's installer cabinets with %s" % unshield)
+    with open(scratch / "unshield.log", "w") as log:
+        r = subprocess.run([unshield, "-d", str(cab), "x", str(stage / "data1.cab")],
+                           stdout=log, stderr=subprocess.STDOUT)
+    if r.returncode != 0 or not cab.is_dir():
+        die("unshield failed (exit %d); the scratch folder %s was kept" % (r.returncode, scratch))
+    result = finish_ci_import(dest, lambda e: cab / e["src"], stage, pvd["label"],
+                              zlib.crc32(b"BNWCI"), image_hash, program_dir)
+    remove_tree(scratch)
+    return result
+
+
+def import_ci_disc_folder(folder, dest, program_dir):
+    folder = Path(folder).expanduser()
+    unshield = find_unshield()
+    dest = Path(dest).expanduser()
+    if not (dest / "Game").is_dir():
+        die("Creature Isle is played over the base game: set Black & White up first, then add Creature Isle")
+    stage = dest / ".Disc.partial"
+    remove_tree(stage)
+    shutil.copytree(folder, stage)
+    scratch = dest / ".import-scratch"
+    remove_tree(scratch)
+    scratch.mkdir()
+    cab = scratch / "cab"
+    print("unpacking the expansion's installer cabinets with %s" % unshield)
+    with open(scratch / "unshield.log", "w") as log:
+        r = subprocess.run([unshield, "-d", str(cab), "x", str(stage / "data1.cab")],
+                           stdout=log, stderr=subprocess.STDOUT)
+    if r.returncode != 0 or not cab.is_dir():
+        die("unshield failed (exit %d); the scratch folder %s was kept" % (r.returncode, scratch))
+    result = finish_ci_import(dest, lambda e: cab / e["src"], stage, "BNWCI",
+                              zlib.crc32(b"BNWCI"), "", program_dir)
+    remove_tree(scratch)
+    return result
+
+
+def import_ci_folder(folder, dest, replace, min_free, program_dir):
+    """Creature Isle from a folder the expansion is installed in. Such a folder holds the
+    base game as well, so when the base game is not set up yet it is set up from the same
+    folder first."""
+    folder = Path(folder).expanduser()
+    dest = Path(dest).expanduser()
+    if not (dest / "Game").is_dir():
+        result = import_folder(folder, dest, replace, min_free, program_dir, route_ci=False)
+        if result != 0:
+            return result
+    return finish_ci_import(dest, FolderIndex(folder).find, None, "BNWCI",
+                            zlib.crc32(str(folder).encode()), "", program_dir)
 
 
 def _volume_value(path, key):
@@ -444,24 +640,33 @@ def _volume_value(path, key):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--iso", help="your Black & White disc image")
-    ap.add_argument("--disc", help="a folder that is a copy of the disc (data1.cab at the top)")
+    ap.add_argument("--iso", help="your Black & White disc image (a Creature Isle image adds the expansion)")
+    ap.add_argument("--disc", help="a folder that is a copy of the disc (data1.cab at the top; "
+                                   "a Creature Isle copy adds the expansion)")
     ap.add_argument("--folder", help="an installed copy of the game (the folder holding Data and Scripts)")
+    ap.add_argument("--ci-folder", help="an installed copy of Creature Isle, added explicitly")
     ap.add_argument("--dest", default=str(DEFAULT_DEST), help="where Game, Disc and Disc.volume go")
     ap.add_argument("--replace", action="store_true", help="replace an earlier import")
     ap.add_argument("--keep-scratch", action="store_true", help="keep the folder of unpacked cabinets")
     ap.add_argument("--min-free-gb", type=int, default=15, help="free disk to leave (default 15)")
-    ap.add_argument("--program-dir", default=str(DEFAULT_PROGRAM_DIR),
-                    help="the folder the program files were lifted from (default: bw1-decomp's)")
+    ap.add_argument("--program-dir",
+                    help="the folder the program files were lifted from (default: each version's own)")
     ap.add_argument("--check", metavar="GAME_FOLDER", help="check a game folder against the manifest; changes nothing")
+    ap.add_argument("--version", choices=("100", "142", "ci"), default="100",
+                    help="with --check: which version's manifest to check against (ci checks both)")
     ap.add_argument("--quick", action="store_true", help="with --check: compare sizes only")
     args = ap.parse_args()
     if args.check:
-        return 0 if check_folder(args.check, load_manifest(), args.quick) else 1
+        if args.version == "ci":
+            ok = check_folder(args.check, load_manifest("100"), args.quick)
+            return 0 if check_folder(args.check, load_manifest("ci"), args.quick) and ok else 1
+        return 0 if check_folder(args.check, load_manifest(args.version), args.quick) else 1
     if args.iso:
         return import_image(args.iso, args.dest, args.replace, args.keep_scratch, args.min_free_gb, args.program_dir)
     if args.disc:
         return import_disc_folder(args.disc, args.dest, args.replace, args.keep_scratch, args.min_free_gb, args.program_dir)
+    if args.ci_folder:
+        return import_ci_folder(args.ci_folder, args.dest, args.replace, args.min_free_gb, args.program_dir)
     if args.folder:
         return import_folder(args.folder, args.dest, args.replace, args.min_free_gb, args.program_dir)
     ap.print_help()

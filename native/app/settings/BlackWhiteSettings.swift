@@ -16,7 +16,8 @@
 //   --set NAME=value ...        changes settings and writes the file, as Save does
 //       screen=window|desktop|exclusive  resolution=WIDTHxHEIGHT|native (the game's own picture
 //       size; the window's Resolution list names each by what is drawn, size times sharpness)
-//       sharpness=auto|1|1.5|2|3...  fps=30|60|120|0  sound=on|off
+//       sharpness=auto|1|1.5|2|3...  fps=30|60|120|0  sound=on|off  volume=0..100 (the master
+//       volume the game's own Options screen also sets)
 //   --window-size               prints the window size the settings give on this Mac
 //   --list-resolutions          prints the Resolution list as the window shows it, with the
 //                               resolution= value --set takes for each
@@ -155,8 +156,10 @@ struct Settings: Equatable {
     /// The most pictures a second (0: no limit).
     var frameCap: Int = 60
     var sound: Bool = true
+    /// The master volume, 0 to 100, over everything the game plays.
+    var volume: Int = 100
 
-    static let managedKeys: Set<String> = ["SCREEN_MODE", "RESOLUTION", "PICTURE", "RENDER_SCALE", "FPS_CAP", "AUDIO"]
+    static let managedKeys: Set<String> = ["SCREEN_MODE", "RESOLUTION", "PICTURE", "RENDER_SCALE", "FPS_CAP", "AUDIO", "VOLUME"]
 
     /// What the file says. An empty or missing RENDER_SCALE, or "auto", is Automatic. The older
     /// PICTURE presets are understood: 1440p and 4k are a size and a fixed scale of 2 (unless
@@ -181,6 +184,7 @@ struct Settings: Equatable {
         sharpness = scale
         if let v = file.value("FPS_CAP"), let n = Int(v), n >= 0 { frameCap = n }
         if let v = file.value("AUDIO") { sound = v != "off" }
+        if let v = file.value("VOLUME"), let n = Int(v), n >= 0, n <= 100 { volume = n }
     }
 
     init() {}
@@ -257,6 +261,10 @@ struct Settings: Equatable {
         #
         # AUDIO: device (play the sound) or off.
         AUDIO=\(sound ? "device" : "off")
+        #
+        # VOLUME: the master volume, 0 to 100, over everything the game plays. The game's own
+        # Options screen sets it too, and it takes effect there at once.
+        VOLUME=\(volume)
         #
         # Set by hand, if wanted (the Settings app leaves them as they are):
         #   QUIT_GRACE_MS=15000   closing the window asks the game to quit; at some moments (the opening
@@ -748,6 +756,7 @@ enum Command {
         say("drawn=\(dw)x\(dh)")
         say("fps=\(s.frameCap)")
         say("sound=\(s.sound ? "on" : "off")")
+        say("volume=\(s.volume)")
     }
 
     /// The choices of the Resolution list for these settings: the standard sizes, one the file holds
@@ -863,6 +872,9 @@ enum Command {
                 case "sound":
                     guard v == "on" || v == "off" else { return fail("sound must be on or off") }
                     model.settings.sound = v == "on"
+                case "volume":
+                    guard let n = Int(v), n >= 0, n <= 100 else { return fail("volume must be 0 to 100") }
+                    model.settings.volume = n
                 default:
                     return fail("unknown setting \(parts[0])")
                 }
@@ -927,6 +939,8 @@ enum SelfTest {
         check(read("SCREEN_MODE=\"desktop\"").screen == .desktop, "quotes round a value are dropped")
         check(read("SCREEN_MODE=nonsense").screen == .window, "a value that makes no sense falls back")
         check(read("FPS_CAP=0").frameCap == 0 && read("AUDIO=off").sound == false, "FPS_CAP=0 and AUDIO=off")
+        check(read("VOLUME=40").volume == 40 && read("VOLUME=250").volume == 100
+                && read("VOLUME=-5").volume == 100, "VOLUME counts, and one out of range falls back")
 
         // Writing and reading again
         var s = Settings()
@@ -935,6 +949,7 @@ enum SelfTest {
         s.sharpness = 2
         s.frameCap = 120
         s.sound = false
+        s.volume = 40
         let text = s.fileText(keeping: [])
         check(read(text) == s, "what is written reads back the same")
         var native = Settings()

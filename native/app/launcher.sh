@@ -32,10 +32,14 @@ NAME="Black & White"
 SUPPORT="${BW_APP_SUPPORT_DIR:-$HOME/Library/Application Support/$NAME}"
 LOGS="${BW_APP_LOGS_DIR:-$HOME/Library/Logs/$NAME}"
 SETTINGS="$SUPPORT/settings.conf"
-# The program file the code was lifted from (the unprotected English 1.00 runblack.exe);
-# bw_native checks the same value before it starts anything. The builder writes the value
-# the build was made with into Resources/defaults.conf; this is the fallback.
+# The program file the code was lifted from; bw_native checks the same SHA-256 before it
+# starts anything. Which one (and which native build runs it) follows GAME_VERSION in the
+# settings (written when the player's copy was added): 100, 142 or ci. EXE_SHA256 named by
+# hand in settings.conf replaces the version's value; this is the 1.00 fallback.
 EXE_SHA256="86a30b08ab2ea8a240403d37f8f0303cf65aa5cde8e7f673049ab01654ccf755"
+GAME_VERSION=""
+NATIVE_BIN="bw_native"
+EXE_CANDIDATES=()
 
 note() { printf '%s\n' "$*" >&2; }
 
@@ -66,6 +70,7 @@ DATA_DIR="$SUPPORT/data"
 SCREEN_MODE="window"
 RESOLUTION="1280x800"
 AUDIO="device"
+VOLUME=""
 POINTER=""
 FPS_CAP=""
 QUIT_GRACE_MS=""
@@ -86,7 +91,7 @@ load_conf() {
     val="$(trim "${line#*=}")"
     case "$val" in \"*\") val="${val#\"}"; val="${val%\"}" ;; esac
     case "$key" in
-      GAME_DIR|DISC_DIR|EXE|EXE_SHA256|DATA_DIR|SCREEN_MODE|RESOLUTION|AUDIO|POINTER|FPS_CAP|QUIT_GRACE_MS|PICTURE|RENDER_SCALE)
+      GAME_DIR|DISC_DIR|EXE|EXE_SHA256|GAME_VERSION|DATA_DIR|SCREEN_MODE|RESOLUTION|AUDIO|VOLUME|POINTER|FPS_CAP|QUIT_GRACE_MS|PICTURE|RENDER_SCALE)
         printf -v "$key" '%s' "$val"
         ;;
     esac
@@ -265,6 +270,8 @@ RENDER_SCALE=
 #
 # AUDIO: device (play the sound) or off.
 AUDIO=device
+# VOLUME: the master volume, 0 to 100. Left out, it is 100. The game's Options screen sets it.
+# VOLUME=100
 #
 # Set by hand, if wanted (the Settings app leaves them as they are):
 #   QUIT_GRACE_MS=15000   closing the window asks the game to quit; at some moments (the opening
@@ -274,7 +281,9 @@ AUDIO=device
 #                         steered by the pointer's motion); empty lets the game decide
 #   GAME_DIR=/path/to/the/installed/Black & White
 #   DISC_DIR=/path/to/the/disc/copy       (the folder next to its .volume file)
-#   EXE=/path/to/the/unprotected/runblack.exe
+#   EXE=/path/to/the/program/file
+#   GAME_VERSION=100                      which version was set up: 100, 142 (Fan Patch) or
+#                                         ci (Creature Isle); written when a disc is added
 SETTINGS_TEXT
 fi
 
@@ -315,10 +324,35 @@ case "$POINTER" in
   ''|absolute|virtual) ;;
   *) fail "POINTER in $SETTINGS must be absolute or virtual (it is \"$POINTER\")." ;;
 esac
+[[ -z "$VOLUME" || "$VOLUME" =~ ^(100|[0-9]{1,2})$ ]] ||
+  fail "VOLUME in $SETTINGS must be 0 to 100 (it is \"$VOLUME\")."
 [[ -z "$FPS_CAP" || "$FPS_CAP" =~ ^[0-9]{1,3}$ ]] ||
   fail "FPS_CAP in $SETTINGS must be a whole number of pictures a second, or 0 (it is \"$FPS_CAP\")."
 [[ -z "$QUIT_GRACE_MS" || "$QUIT_GRACE_MS" =~ ^[0-9]{1,6}$ ]] ||
   fail "QUIT_GRACE_MS in $SETTINGS must be a whole number of milliseconds, or 0 (it is \"$QUIT_GRACE_MS\")."
+
+# Which version was set up decides the native build and the program it runs. A pin named
+# by hand in settings.conf (EXE_SHA256) replaces the version's own.
+case "$GAME_VERSION" in
+  142)
+    NATIVE_BIN="bw_native_142"
+    EXE_CANDIDATES=("$GAME_DIR/runblack.exe")
+    grep -q '^EXE_SHA256=' "$SETTINGS" 2>/dev/null ||
+      EXE_SHA256="3f58bc02a6c421b4e66ef08716646bf0e1fa55ab292786edb521d7596ed48aba"
+    ;;
+  ci)
+    NATIVE_BIN="bw_native_ci"
+    EXE_CANDIDATES=("$GAME_DIR/CreatureIsle.exe" "$GAME_DIR/CreatureIsle-decrypted.exe")
+    grep -q '^EXE_SHA256=' "$SETTINGS" 2>/dev/null ||
+      EXE_SHA256="72345d04368a40ec22e2960aed9e43b57f63bc299dfad56cbcd4bbf8faea3636"
+    ;;
+  *)
+    GAME_VERSION="100"
+    EXE_CANDIDATES=("$GAME_DIR/runblack-decrypted.exe" "$GAME_DIR/runblack.exe" "$DISC_DIR/crack/runblack.exe")
+    grep -q '^EXE_SHA256=' "$SETTINGS" 2>/dev/null ||
+      EXE_SHA256="86a30b08ab2ea8a240403d37f8f0303cf65aa5cde8e7f673049ab01654ccf755"
+    ;;
+esac
 
 # The game's files.
 [ -n "$GAME_DIR" ] && [ -d "$GAME_DIR" ] ||
@@ -345,7 +379,7 @@ if [ -n "$EXE" ]; then
   matches_build "$EXE" ||
     fail "EXE in $SETTINGS (\"$EXE\") is not the program this build was made from (SHA-256 $EXE_SHA256). Open Black & White and add your copy of the game again to set it up afresh."
 else
-  for candidate in "$GAME_DIR/runblack-decrypted.exe" "$GAME_DIR/runblack.exe" "$DISC_DIR/crack/runblack.exe"; do
+  for candidate in "${EXE_CANDIDATES[@]}"; do
     if matches_build "$candidate"; then
       EXE="$candidate"
       break
@@ -391,6 +425,7 @@ fi
 LOG="$LOGS/native-$(date +%Y%m%d-%H%M%S).log"
 {
   echo "start $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "version:     $GAME_VERSION (build $NATIVE_BIN)"
   echo "game folder: $GAME_DIR"
   echo "disc copy:   $DISC_DIR"
   echo "program:     $EXE"
@@ -441,14 +476,15 @@ export BW_CD_DIR="$DISC_DIR"
 export BW_FULLSCREEN="$SCREEN_MODE"
 export BW_BACKGROUND="${BW_BACKGROUND:-0}"
 [ "$AUDIO" = off ] && export BW_AUDIO=off
+[ -n "$VOLUME" ] && export BW_MASTER_VOLUME="$VOLUME"
 [ -n "$POINTER" ] && export BW_POINTER="$POINTER"
 [ -n "$FPS_CAP" ] && export BW_FPS_CAP="$FPS_CAP"
 [ -n "$QUIT_GRACE_MS" ] && export BW_QUIT_GRACE_MS="$QUIT_GRACE_MS"
 [ -n "$PICTURE_SCALE" ] && export BW_RENDER_SCALE="$PICTURE_SCALE"
 
 if [ -n "${BW_APP_DRYRUN:-}" ]; then
-  echo "would start: $CONTENTS/MacOS/bw_native --game-dir $GAME_DIR --exe $EXE --data-dir $DATA_DIR"
-  echo "environment: BW_CD_DIR=$BW_CD_DIR BW_FULLSCREEN=$BW_FULLSCREEN BW_BACKGROUND=$BW_BACKGROUND${BW_AUDIO:+ BW_AUDIO=$BW_AUDIO}${BW_POINTER:+ BW_POINTER=$BW_POINTER}${BW_FPS_CAP:+ BW_FPS_CAP=$BW_FPS_CAP}${BW_QUIT_GRACE_MS:+ BW_QUIT_GRACE_MS=$BW_QUIT_GRACE_MS}${BW_RENDER_SCALE:+ BW_RENDER_SCALE=$BW_RENDER_SCALE}"
+  echo "would start: $CONTENTS/MacOS/$NATIVE_BIN --game-dir $GAME_DIR --exe $EXE --data-dir $DATA_DIR"
+  echo "environment: BW_CD_DIR=$BW_CD_DIR BW_FULLSCREEN=$BW_FULLSCREEN BW_BACKGROUND=$BW_BACKGROUND${BW_AUDIO:+ BW_AUDIO=$BW_AUDIO}${BW_MASTER_VOLUME:+ BW_MASTER_VOLUME=$BW_MASTER_VOLUME}${BW_POINTER:+ BW_POINTER=$BW_POINTER}${BW_FPS_CAP:+ BW_FPS_CAP=$BW_FPS_CAP}${BW_QUIT_GRACE_MS:+ BW_QUIT_GRACE_MS=$BW_QUIT_GRACE_MS}${BW_RENDER_SCALE:+ BW_RENDER_SCALE=$BW_RENDER_SCALE}"
   echo "registry:    $REGISTRY"
   echo "log:         $LOG"
   if [ -n "${BW_SETTINGS_TOOL:-}" ]; then
@@ -481,4 +517,4 @@ APPLESCRIPT
   disown 2>/dev/null || true
 fi
 
-exec "$CONTENTS/MacOS/bw_native" --game-dir "$GAME_DIR" --exe "$EXE" --data-dir "$DATA_DIR" >> "$LOG" 2>&1
+exec "$CONTENTS/MacOS/$NATIVE_BIN" --game-dir "$GAME_DIR" --exe "$EXE" --data-dir "$DATA_DIR" >> "$LOG" 2>&1

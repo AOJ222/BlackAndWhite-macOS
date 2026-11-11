@@ -16,6 +16,13 @@ What you need
   patched copy, or another language edition.
 - About 3 GB of free disk space.
 
+New in 0.3.0
+------------
+- If your copy of the game is patched (1.10/1.20 or the Fan Patch), you
+  now play the Fan Patch 1.42 build. An unpatched copy plays the
+  original 1.00 build, as before.
+- Creature Isle (the expansion) is not supported yet.
+
 Set-up (once)
 -------------
 1. Move "Black & White.app" into your Applications folder.

@@ -34,6 +34,20 @@ and marked "mutable" (Data/Textures/PlayersSymbols.raw and PlayersSymbolsa.raw):
 copies differ from the cabinet's although the sizes are the same, and the native build copies these files
 before the game may write to them (src/overlay.cpp), so the game seems to write to them (inferred); a
 check therefore allows a different content for them.
+
+Two more manifests come from the same writer:
+
+    python3 native/app/make-game-manifest.py --version 142 ... (the same inputs, with
+        --program-dir toolkit-trial/bw-1.42) --out native/app/game-manifest-142.json
+    python3 native/app/make-game-manifest.py --version ci --cab-ci <EU extract> \
+        --cab-ci-us <US extract> --program-dir bw1-decomp/orig/BW1WCI \
+        --out native/app/game-manifest-ci.json
+
+The 1.42 manifest lists the same content files (a copy of any version is accepted, as above) with the
+Fan Patch 1.42 program files under "program". The Creature Isle manifest lists only what the expansion
+adds over the base game: the files of the installer's CreatureIsles, CreatureIsles_DLL and
+CreatureIsles_Exe groups, with the expansion's five program files under "program" (--cab-ci-us, when
+given, contributes "variants" for the files the US disc carries in another form).
 """
 import argparse
 import hashlib
@@ -58,6 +72,25 @@ PROGRAM = (
     ("LHMultiplayerR.dll", "LHMultiplayerR.dll"),
     ("Plug Ins/ScriptLibraryR.dll", None),
 )
+# Fan Patch 1.42: the program files keep their installed names in --program-dir.
+PROGRAM_142 = (
+    ("runblack.exe", "runblack.exe"),
+    ("LHLogR.dll", "LHLogR.dll"),
+    ("LHaudiodllR.dll", "LHaudiodllR.dll"),
+    ("LHMultiplayerR.dll", "LHMultiplayerR.dll"),
+    ("Plug Ins/ScriptLibraryR.dll", None),
+)
+# Creature Isle: the expansion's program, its three libraries and its script library.
+PROGRAM_CI = (
+    ("CreatureIsle.exe", "CreatureIsle-decrypted.exe"),
+    ("LHLogR.dll", "LHLogR.dll"),
+    ("LHaudiodllR.dll", "LHaudiodllR.dll"),
+    ("LHMultiplayerR.dll", "LHMultiplayerR.dll"),
+    ("Plug Ins/ScriptLibraryR.dll", None),
+)
+# The installer groups of the expansion disc that land in the game folder, and the
+# group each file's "src" is relative to in the unshield output.
+CI_GROUPS = ("CreatureIsles", "CreatureIsles_DLL", "CreatureIsles_Exe")
 PROGRAM_DESTS = {dest for dest, _src in PROGRAM}
 OPTIONAL = {
     "DSETUP.dll",
@@ -96,16 +129,91 @@ def hashed_tree(root):
     return {rel: (os.path.getsize(p), sha256(p)) for rel, p in walk(root)}
 
 
+def program_entries(mapping, program_dir, game):
+    """The "program" list of a manifest, from a (dest, name in --program-dir) mapping."""
+    entries = []
+    pdir = Path(program_dir)
+    for dest, src in mapping:
+        p = (pdir / src) if src else None
+        if p is None or not p.is_file():
+            p = pdir / dest
+        if not p.is_file():
+            p = pdir / dest.rsplit("/", 1)[-1]
+        if not p.is_file() and game:
+            p = Path(game) / dest
+        if not p.is_file():
+            print("problem: program file %s is missing" % p, file=sys.stderr)
+            return None
+        entries.append({"dest": dest, "size": os.path.getsize(p), "sha256": sha256(p)})
+    return entries
+
+
+def build_ci(args):
+    """The Creature Isle manifest: what the expansion adds over the base game."""
+    if not args.cab_ci or not args.program_dir:
+        print("problem: --version ci needs --cab-ci and --program-dir", file=sys.stderr)
+        return 1
+    program = program_entries(PROGRAM_CI, args.program_dir, None)
+    if program is None:
+        return 1
+    program_dests = {dest for dest, _src in PROGRAM_CI}
+    us = hashed_tree(args.cab_ci_us)
+    entries = []
+    for group in CI_GROUPS:
+        for rel, p in sorted(walk(os.path.join(args.cab_ci, group))):
+            # The installer puts the group's Plug_Ins folder in the game folder as
+            # "Plug Ins"; everything else keeps its name.
+            dest = "Plug Ins/" + rel[len("Plug_Ins/"):] if rel.startswith("Plug_Ins/") else rel
+            if dest in program_dests:
+                continue
+            h = sha256(p)
+            entry = {"dest": dest, "size": os.path.getsize(p), "sha256": h,
+                     "from": "cab", "src": group + "/" + rel, "check": check_kind(dest)}
+            got = us.get(group + "/" + rel)
+            if got and got[1] != h:
+                entry["variants"] = [{"size": got[0], "sha256": got[1]}]
+            entries.append(entry)
+    manifest = {
+        "format": 2,
+        "about": "What Creature Isle, the Black & White expansion, adds over the base game, file by "
+                 "file: the files of the expansion disc's installer groups (CreatureIsles, "
+                 "CreatureIsles_DLL and CreatureIsles_Exe in its data1.cab, with unshield's default "
+                 "names), each file's size and SHA-256, the forms the file is known in from the US "
+                 "disc ('variants'), and how it is checked ('strict', or 'any' for the files that "
+                 "carry a language). The expansion's five program files are under 'program': the app "
+                 "generates them at set-up and never takes them from the player's copy. Paths, "
+                 "sizes and hashes only.",
+        "disc_label": "BNWCI",
+        "program": program,
+        "files": entries,
+    }
+    with open(args.out, "w") as f:
+        json.dump(manifest, f, indent=1)
+        f.write("\n")
+    print("wrote %s: %d content files, %d program files" % (args.out, len(entries), len(program)))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--game", required=True)
-    ap.add_argument("--disc", required=True)
-    ap.add_argument("--cab", required=True)
+    ap.add_argument("--version", choices=("100", "142", "ci"), default="100")
+    ap.add_argument("--game")
+    ap.add_argument("--disc")
+    ap.add_argument("--cab")
+    ap.add_argument("--cab-ci", help="the unshield output of the Creature Isle disc (EU)")
+    ap.add_argument("--cab-ci-us", help="the unshield output of the Creature Isle disc (US), for variants")
     ap.add_argument("--game-120")
     ap.add_argument("--game-142")
     ap.add_argument("--program-dir", help="the folder the program files were lifted from")
     ap.add_argument("--out", default=str(HERE / "game-manifest.json"))
     args = ap.parse_args()
+
+    if args.version == "ci":
+        return build_ci(args)
+    if not (args.game and args.disc and args.cab):
+        print("problem: --game, --disc and --cab are needed", file=sys.stderr)
+        return 1
+    program_map = PROGRAM_142 if args.version == "142" else PROGRAM
 
     cab = {rel: (p, sha256(p)) for rel, p in walk(args.cab)}
     disc = {}
@@ -123,20 +231,17 @@ def main():
 
     program = []
     if args.program_dir:
-        pdir = Path(args.program_dir)
-        for dest, src in PROGRAM:
-            p = (pdir / src) if src else (Path(args.game) / dest)
-            if not p.is_file():
-                print("problem: program file %s is missing" % p, file=sys.stderr)
-                return 1
-            program.append({"dest": dest, "size": os.path.getsize(p), "sha256": sha256(p)})
+        program = program_entries(program_map, args.program_dir, args.game)
+        if program is None:
+            return 1
 
+    program_dests = {dest.lower() for dest, _src in program_map} | PROGRAM_DESTS
     entries = []
     problems = []
     for rel, p in sorted(walk(args.game)):
         if rel in LEFTOVERS or rel.startswith(LEFTOVERS[1]):
             continue
-        if rel in PROGRAM_DESTS:
+        if rel.lower() in program_dests:
             continue
         if rel in REWRITTEN:
             # the cabinet's own copy, found by name
