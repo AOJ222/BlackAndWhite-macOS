@@ -1,0 +1,84 @@
+Black & White for Mac
+=====================
+
+A native macOS port of Black & White (2001) for Apple silicon Macs. It is
+an unofficial fan project.
+
+This download contains none of the game's content: the worlds, creatures,
+sounds, music, movies and text all come from your own copy of
+Black & White, which is read once during set-up and never changed. It does
+contain the game's program: the game's executable and program libraries
+for each supported version, and Apple silicon code translated from them.
+The README in the project repository lists what is in the download.
+
+What you need
+-------------
+- An Apple silicon Mac running macOS 27. It has been tried on one Mac only
+  (an M2 Pro with 16 GB on macOS 27.2); other chips, and macOS 27.0 and
+  27.1, are untried.
+- Your own copy of Black & White in English: the PC disc as an .iso disc
+  image, a folder that is a copy of the disc, or the folder the game is
+  already installed in. The original disc, or a copy patched to 1.10, 1.20
+  or the unofficial Fan Patch 1.42, can be used (1.10 copies have not been
+  tried). Other language editions are not supported yet.
+- About 3 GB of free disk space.
+
+Which build you play
+--------------------
+- An unpatched copy of the game plays the original 1.00 build.
+- A patched copy (1.10, 1.20 or the Fan Patch) plays the Fan Patch 1.42
+  build.
+- Creature Isle (the expansion) is not supported yet.
+
+Set-up (once)
+-------------
+1. Move "Black & White.app" into your Applications folder.
+   ("Black & White Settings.app" too, if you want to change the
+   picture size, frame rate limit or sound outside the game.)
+2. Open Black & White. macOS may refuse the first launch because the
+   app is not notarised: open System Settings, go to Privacy &
+   Security, scroll down, click "Open Anyway", then "Open".
+3. The app asks you to add your copy of the game. Choose your .iso
+   image, the folder that is a copy of the disc, or the folder the
+   game is installed in. The app checks every file, builds the game
+   under ~/Library/Application Support/Black & White, and says when
+   it is ready. This takes under a minute.
+4. Press "Play Black & White".
+
+After that, just open the app: it goes straight to the game and the
+disc is not needed again.
+
+Playing
+-------
+- Everything is played with the mouse. Control-click (or a two-finger
+  click) is the right mouse button; pinch or scroll to zoom.
+- Cmd-Q quits. In the game's Options screen you can also change the
+  Screen and Resolution while you play, and set Sound and Master Volume.
+- "Black & White Settings.app" changes the picture size, frame rate
+  limit and sound before you start. It has no volume row; the master
+  volume is set in the game's Options screen.
+- Saves live in ~/Library/Application Support/Black & White/data.
+
+If something goes wrong
+-----------------------
+- If the app says it cannot use what you chose, nothing was set up.
+  Try the .iso image, a fresh folder copy of the disc, or the folder
+  the game is installed in.
+- To start set-up over, quit the game and delete the folder
+  ~/Library/Application Support/Black & White, then open the app again.
+- Logs are kept in ~/Library/Logs/Black & White (the ten newest).
+
+About this port
+---------------
+The original game's code runs natively on Apple silicon: it was
+translated ahead of time with SwARc (https://github.com/JTM-rootstorm/SwARc,
+MIT licence). The game's worlds, creatures, sounds, music, movies and text
+come only from your copy and are not in the download; the app does contain
+the game's program files and code translated from them. Black & White is a
+trademark of its owners; this is an unofficial fan port, not affiliated with
+or endorsed by them. Please do not share the files imported from your
+disc.
+
+The licences of the software in this download are in the Licenses folder
+next to the apps. Licenses/SOURCE-OFFER.txt is a written offer of the
+source code of FFmpeg, which is under the LGPL.

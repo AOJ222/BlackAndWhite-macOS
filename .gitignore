@@ -1,0 +1,6 @@
+*.app/
+out/
+__pycache__/
+*.pyc
+.DS_Store
+native/app/icon-art/
