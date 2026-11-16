@@ -25,7 +25,6 @@ Useful checks for app-layer changes:
 native/app/tests/frontdoor.sh
 native/app/tests/picture-settings.sh
 native/app/tests/settings-app.sh
-python3 native/app/tests/icon.py
 ```
 
 Please say which checks you ran in the pull request. Do not weaken or skip a check to

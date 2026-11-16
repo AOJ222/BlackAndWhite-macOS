@@ -98,8 +98,9 @@ settings app, the manifest the game is checked against, and the tests
   1.42 copies has been run, and both started and played the intro. The turn-by-turn checks
   have not been run on this build, and 1.10 copies have not been tried.
 - Creature Isle, the expansion, is not supported yet.
-- Sound and the opening movies run; so far they have been checked by programs only, not by
-  ear and eye. Networking (LAN multiplayer) does not work.
+- Sound and the opening movies run. On the 1.00 build they have been checked by programs and
+  by ear and eye; on the Fan Patch 1.42 build, by programs only. Networking (LAN
+  multiplayer) does not work.
 - The Settings app and the game's own Options screen change picture size and frame rate.
   The Options screen also has Sound and Master Volume rows; the Settings app's window has
   no volume row.

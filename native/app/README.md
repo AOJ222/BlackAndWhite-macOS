@@ -487,7 +487,7 @@ Run `stage-game.py` again to refresh staged game folders.
 
 - **Autosave:** ~**0.5 s** pause each time (~every ten minutes at the default interval).
 - **Start-up crash:** a rare crash at start-up (about **1 start in 45**) was traced and fixed; 150 starts in a row (hidden window, a fresh data folder each) then ran with none. Not repeated by hand in a visible window.
-- **Sound and movies:** verified by programs only, not by ear or eye.
+- **Sound and movies:** verified by programs, and by ear and eye on the 1.00 build; on the Fan Patch 1.42 build by programs only.
 - **Larger pictures:** every size and sharpness the Settings app offers opens a window of the size it says and reaches a saved game in scripted, hidden runs (table above), and the older `PICTURE=1440p` and `4k` ran the heaviest known scene (Land 4) at about 120 pictures a second in hidden runs. None has been played by hand, so the pointer in the new windows, the feel and the sound at 4K are unchecked, and the two largest pictures (1920 × 1200 at 2×, this display at 2×) ran at about 55 to 60 pictures a second while the Mac was short of memory.
 - **Black edge:** the last column and row of the picture are black, as in the original (the game's own 2D clip window ends at width − 2 and height − 2).
 

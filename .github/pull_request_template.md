@@ -8,7 +8,6 @@
 - native/app/tests/frontdoor.sh
 - native/app/tests/picture-settings.sh
 - native/app/tests/settings-app.sh
-- python3 native/app/tests/icon.py
 -->
 
 ## Content check
